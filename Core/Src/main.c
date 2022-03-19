@@ -334,7 +334,6 @@ void StartDefaultTask(void *argument)
       // transmit the length of packet byte
       uint16_t edata = packet_length;
       osMessageQueuePut(dataQueueHandle, &edata, 0, portMAX_DELAY);
-      while(CDC_Transmit_FS(&packet_length, 1) == USBD_BUSY);
 
       // transmit all following bytes
       for(size_t i=0;i<packet_length-1;i++) {
@@ -346,7 +345,6 @@ void StartDefaultTask(void *argument)
           // we got a byte from the queue. push it to be transmitted.
           edata = data;
           osMessageQueuePut(dataQueueHandle, &edata, 0, portMAX_DELAY);
-          while(CDC_Transmit_FS(&data, 1) == USBD_BUSY);
         } else {
           // we didn't get a byte in time. this breaks the transmission.
           // return to idle state
