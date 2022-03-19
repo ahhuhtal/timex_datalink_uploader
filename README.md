@@ -10,7 +10,7 @@ As it stands, the LED (and current limiting resistor) is expected to be connecte
 
 Data is transmitted to the software through the Bluepill USB port using USB CDC (device will register as /dev/ttyACMx under Linux). The selected bitrate or framing doesn't affect communication.
 
-There is no protocol. Anything transmitted to the device will be output to the watch as well as echoed back. The watch data rate is much slower than USB CDC, and the data to be transmitted is buffered in the MCU (now 8kB). It is possible to overflow this buffer by sending more data, but since the watch can ever only take about 3kB of data in, it should be enough for normal operation even with the watch upload protocol overheads.
+There is no protocol. Anything transmitted to the device will be output to the watch. The watch data rate is much slower than USB CDC, and the data to be transmitted is buffered in the MCU (now 8kB). It is possible to overflow this buffer by sending more data, but since the watch can ever only take about 3kB of data in, it should be enough for normal operation even with the watch upload protocol overheads.
 
 This is such a quick hack, that it is made in STM32CubeIDE and also uses FreeRTOS. If I have time, I'll work on making this smaller, simpler and neater.
 
@@ -21,6 +21,9 @@ E.g.
 ```
 # generate a bitstream containing only date and time using example datafile
 ./setwatch -150 -file -time datafile
+
+# set tty to suitable settings
+stty -F /dev/ttyACM0 raw pass8
 
 # dump bitstream to watch
 cat DEBUGOUTPUT > /dev/ttyACM0
