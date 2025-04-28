@@ -108,30 +108,8 @@ void handle_bit_transitions(void) {
         current_data |= (1<<12)|(data2<<13);
       }
     } else {
-      // generate sync frame
-      // frame bit 0 == 1, LED on  (start bit == 0)
-      // frame bit 1 == 0, LED off (data bit 0 == 1)
-      // frame bit 2 == 1, LED on  (data bit 1 == 0)
-      // frame bit 3 == 0, LED off (data bit 2 == 1)
-      // frame bit 4 == 1, LED on  (data bit 3 == 0)
-      // frame bit 5 == 0, LED off (data bit 4 == 1)
-      // frame bit 6 == 1, LED on  (data bit 5 == 0)
-      // frame bit 7 == 0, LED off (data bit 6 == 1)
-      // frame bit 8 == 1, LED on  (data bit 7 == 0)
-      // frame bit 9 == 0, LED off (dummy bit == 1)
-      // frame bit 10== 0, LED off (dummy bit == 1)
-      // frame bit 11== 0, LED off (dummy bit == 1)
-      // frame bit 12== 1, LED on  (start bit == 0)
-      // frame bit 13== 0, LED off (data bit 0 == 1)
-      // frame bit 14== 1, LED on  (data bit 1 == 0)
-      // frame bit 15== 0, LED off (data bit 2 == 1)
-      // frame bit 16== 1, LED on  (data bit 3 == 0)
-      // frame bit 17== 0, LED off (data bit 4 == 1)
-      // frame bit 18== 1, LED on  (data bit 5 == 0)
-      // frame bit 19== 0, LED off (data bit 6 == 1)
-      // frame bit 20== 1, LED on  (data bit 7 == 0)
-      // frame bits 21-33, LED off (dummy bits == 1)
-      current_data = 0x155155;
+      // generate idle frame
+      current_data = 0;
     }
 
     counter=0;

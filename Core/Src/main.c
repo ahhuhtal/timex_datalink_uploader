@@ -24,6 +24,7 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#include <stdbool.h>
 #include "usbd_cdc_if.h"
 /* USER CODE END Includes */
 
@@ -288,6 +289,54 @@ static void MX_GPIO_Init(void)
 
 /* USER CODE BEGIN 4 */
 
+// receive packet_length bytes from the UART queue and push them to the data output buffer
+// adding in the delay frames required between packets.
+// echo determines whether to echo received bytes back or not
+
+bool handle_packet(uint8_t packet_length, bool echo) {
+  // data output buffer uses uint16_t instead of uint8_t to encode the idle state (>0xff)
+
+  // send the packet length byte first
+  uint16_t uint16_data = packet_length;
+  osMessageQueuePut(dataQueueHandle, &uint16_data, 0, portMAX_DELAY);
+
+  if(echo) while(CDC_Transmit_FS(&packet_length, 1) == USBD_BUSY);
+
+  // transmit all following bytes (total bytes = packet_length, which includes the length byte itself)
+  for(size_t i=0;i<packet_length-1;i++) {
+    uint8_t data;
+
+    status = osMessageQueueGet(uartQueueHandle, &data, NULL, 500);
+
+    if(status == osOK) {
+      // we got a byte from the queue. push it to be transmitted.
+      uint16_data = data;
+      osMessageQueuePut(dataQueueHandle, &uint16_data, 0, portMAX_DELAY);
+
+      if(echo) while(CDC_Transmit_FS(&data, 1) == USBD_BUSY);
+    } else {
+      // we didn't get a byte in time. this breaks the transmission.
+
+      // return failure
+      return false;
+    }
+  }
+
+  // if the packet was of odd length, push an extra idle byte to make output bytes even
+  if(packet_first_byte%2==1) {
+    uint16_t dummy = 0xffff;
+    osMessageQueuePut(dataQueueHandle, &dummy, 0, portMAX_DELAY);
+  }
+
+  // push the end of packet delay as idle bytes at end of packet
+  for(size_t i=0;i<22;i++) {
+    uint16_t delay = 0xffff;
+    osMessageQueuePut(dataQueueHandle, &delay, 0, portMAX_DELAY);
+  }
+
+  return true;
+}
+
 /* USER CODE END 4 */
 
 /* USER CODE BEGIN Header_StartDefaultTask */
@@ -308,69 +357,102 @@ void StartDefaultTask(void *argument)
 
   LL_TIM_EnableCounter(TIM4);
 
-  osDelay(5000);
-  uint8_t stream_started = 0;
+  // wait for a while for USB to get initialized etc.
+  osDelay(1000);
+
+  // are we in stream mode?
+  bool stream_started = 0;
+
+  // are we emulating a notebook adapter?
+  bool notebook_adapter_mode = 0;
 
   /* Infinite loop */
   for(;;) {
+    // we can operate in a few different modes:
+    // either we are in the middle of a data stream, or we are not
+    // a data stream is the part of a transmission where we are getting a continuous stream of packets
+
+    // if we are in a data stream, then things are clear:
+    // we receive each packet separately and transmit it to the watch.
+    // a packet starts with a byte describing the length of the packet
+
+    // if we are not in a data stream, then
+    // 1. either we have not received anything, or
+    // 2. we have received data related to the notebook adapter handshake, but no actual data yet
+
+    // if we have received notebook adapter handshake, then we echo all data back as is expected
+    // if we have not received the notebook adapter handshake when going to data stream, we will not echo
+
+    // not echoing the data allows a simple "cat data > /dev/ttyACM0" without the tty blocking due to full receive buffers.
+
     // wait for data on uart
-    uint8_t packet_length;
-    osStatus_t status = osMessageQueueGet(uartQueueHandle, &packet_length, NULL, 500);
+    uint8_t byte;
+    osStatus_t status = osMessageQueueGet(uartQueueHandle, &byte, NULL, 500);
 
+    // did we get a byte, or did we time out?
     if(status == osOK) {
+      // we got something. are we handling a stream yet?
       if(!stream_started) {
-        stream_started = 1;
+        // we have not yet started a data stream, so either this was the first byte ever
+        // or we are in notebook adapter handshake
 
-        osMessageQueueReset(dataQueueHandle);
+        // are we in notebook adapter mode?
+        if(!notebook_adapter_mode) {
+          // no. did we just receive the notebook handshake byte?
+          if(byte == 'x') {
+            // we received the notebook adapter initial handshake.
+            // we go to notebook adapter mode
+            notebook_adapter_mode = true;
 
-        // stream wasn't active. transmit start of transmission bytes.
-        for(size_t i=0;i<50;i++) {
-          uint16_t start = 0xaa;
-          osMessageQueuePut(dataQueueHandle, &start, 0, portMAX_DELAY);
-        }
-      }
-
-      // transmit actual packet data
-      // transmit the length of packet byte
-      uint16_t edata = packet_length;
-      osMessageQueuePut(dataQueueHandle, &edata, 0, portMAX_DELAY);
-
-      // transmit all following bytes
-      for(size_t i=0;i<packet_length-1;i++) {
-        uint8_t data;
-
-        status = osMessageQueueGet(uartQueueHandle, &data, NULL, 500);
-
-        if(status == osOK) {
-          // we got a byte from the queue. push it to be transmitted.
-          edata = data;
-          osMessageQueuePut(dataQueueHandle, &edata, 0, portMAX_DELAY);
+            // echo back the byte
+            while(CDC_Transmit_FS(&byte, 1) == USBD_BUSY);
+          } else {
+            // we did not receive handshake.
+            // this is the beginning of a raw data stream.
+            stream_started = true;
+          }
         } else {
-          // we didn't get a byte in time. this breaks the transmission.
-          // return to idle state
-
-          stream_started = 0;
-          osMessageQueueReset(dataQueueHandle);
-
-          break;
+          // we are in notebook adapter mode, but stream has not been started
+          if(byte=='?') {
+            // we received the identification request. respond to that with the ID string.
+            char* ident_string = "126\r M764 rev 764002";
+            while(CDC_Transmit_FS((uint8_t*)ident_string, strlen(ident_string)+1) == USBD_BUSY);
+          } else if(byte=='x' || byte==0x55 || byte==0xaa) {
+            // we received either the handshake byte, a sync byte of start of transmission byte
+            // sync bytes and start of transmissions bytes are handled internally
+            // we're yet to start the stream, but need to echo these bytes
+            while(CDC_Transmit_FS(&byte, 1) == USBD_BUSY);
+          } else {
+            //
+          }
         }
+
+        // did we start a stream just now?
+        if(stream_started) {
+          // transmit the start of transmission bytes.
+          for(size_t i=0;i<50;i++) {
+            uint16_t start = 0xaa;
+            osMessageQueuePut(dataQueueHandle, &start, 0, portMAX_DELAY);
+          }
+
+          // handle the first packet
+          handle_packet(byte, notebook_adapter_mode);
+        }
+      } else {
+        // stream is ongoing. handle next packet
+        handle_packet(byte, notebook_adapter_mode);
       }
 
-      if(stream_started) {
-        if(packet_length%2==1) {
-          uint16_t dummy = 0x00;
-          osMessageQueuePut(dataQueueHandle, &dummy, 0, portMAX_DELAY);
-        }
-
-        // transmit delay at end of packet
-        for(size_t i=0;i<22;i++) {
-          uint16_t delay = 0xffff;
-          osMessageQueuePut(dataQueueHandle, &delay, 0, portMAX_DELAY);
-        }
-      }
     } else {
+      // we timed out receiving a byte. reset the stream state and notebook adapter mode
       stream_started = 0;
-      osMessageQueueReset(dataQueueHandle);
+      notebook_adapter_mode = 0;
+
+      // generate sync bytes to be transmitted
+      for(size_t i=0;i<64;i++) {
+        uint16_t delay = 0x55;
+        osMessageQueuePut(dataQueueHandle, &delay, 0, portMAX_DELAY);
+      }
     }
   }
   /* USER CODE END 5 */
